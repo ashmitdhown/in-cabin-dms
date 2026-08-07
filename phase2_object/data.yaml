@@ -1,0 +1,9 @@
+# Reconstructed from project slides + benchmark report — NOT the original Roboflow export.
+# Verify path/train/val against the actual data.yaml before training with this file.
+
+path: ../datasets/phase2_object   # placeholder — dataset not included in this repo
+train: images/train
+val: images/val
+
+nc: 1
+names: ['True-Object']
