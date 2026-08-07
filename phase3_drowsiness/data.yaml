@@ -1,0 +1,13 @@
+# Reconstructed from project slides + benchmark report — NOT the original Roboflow export.
+# Verify path/train/val against the actual data.yaml before training with this file.
+#
+# Note: images were collected with 2 sub-behaviour labels (Yawning, Dropping-Head) but the
+# trained detector below uses a single merged class, "Drowsy-True" — confirm this is still
+# the intended label scheme before retraining.
+
+path: ../datasets/phase3_drowsiness   # placeholder — dataset not included in this repo
+train: images/train
+val: images/val
+
+nc: 1
+names: ['Drowsy-True']

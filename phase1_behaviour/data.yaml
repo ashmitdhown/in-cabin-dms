@@ -1,0 +1,9 @@
+# Reconstructed from project slides + benchmark report — NOT the original Roboflow export.
+# Verify path/train/val against the actual data.yaml before training with this file.
+
+path: ../datasets/phase1_behaviour   # placeholder — dataset not included in this repo
+train: images/train
+val: images/val
+
+nc: 2
+names: ['False-Gaze', 'True-Gaze']   # index order confirmed from best.pt benchmark report
