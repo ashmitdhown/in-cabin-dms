@@ -1,202 +1,190 @@
-<div align="center">
+# In-Cabin AI Monitoring System
 
-# Edge AI Bioacoustic Monitoring for Biodiversity Conservation
+Real-time driver state monitoring for SAE Level 2 partially-automated vehicles, built on three
+YOLOv11 detectors and a custom single-backbone fusion architecture (Hook-Tap) that runs two of
+them through one shared network instead of two separate ones.
 
-**Detecting rare and unknown wildlife species by listening, not looking — designed for remote habitats no human survey team can reach.**
+## Contents
 
-🏆 **1st Place — IEEE Sustainathon**
+- [Motivation](#motivation)
+- [Detection modules](#detection-modules)
+- [The multi-task fusion journey](#the-multi-task-fusion-journey)
+- [Hook-Tap architecture](#hook-tap-architecture)
+- [Repo structure](#repo-structure)
+- [Getting started](#getting-started)
+- [Data & weights](#data--weights)
+- [Roadmap](#roadmap)
+- [Paper](#paper)
+- [Authors](#authors)
 
-[![Python](https://img.shields.io/badge/Python-3.10-blue?logo=python)](https://www.python.org/)
-[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange?logo=tensorflow)](https://www.tensorflow.org/)
-[![Librosa](https://img.shields.io/badge/Audio-Librosa-4B8BBE)](https://librosa.org/)
-[![Status](https://img.shields.io/badge/Status-Prototype%20%E2%80%94%20Edge%20Deployment%20In%20Progress-yellow)]()
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+## Motivation
 
-</div>
+SAE Level 2 automation is defined as hands-off, eyes-on — the driver doesn't steer, but has to
+stay ready to take over instantly. In practice that's not what happens: NHTSA data shows 57% of
+drivers misuse semi-autonomous features and 23% report difficulty staying attentive during
+automated driving, while existing driver-monitoring systems — steering-torque sensors, basic
+eye-tracking — catch only 70–80% of dangerous behaviors.
 
----
+A literature review across 2023–2026 driver-monitoring papers (`docs/paper/`) found the same gaps
+recurring: architectural fragmentation across single-task models, no YOLO-family multi-task
+learning in this space, prohibited-object detection treated as a marginal add-on rather than a
+core signal, and no dataset with simultaneous gaze/drowsiness/object annotation. This project
+builds three purpose-trained detectors to close the coverage gap, then a fused architecture
+(Hook-Tap) to close the runtime-cost gap of running them all.
 
-## 📖 Overview
+## Detection modules
 
-Large swaths of the planet's most biodiverse habitats — deep mangrove forests, dense rainforest canopy, unmapped wetlands — are effectively invisible to conservation science simply because no human can safely or affordably survey them on the ground. Species can go undiscovered, or unmonitored to extinction, for exactly that reason.
+| Module | Task | Classes | Dataset | Precision | Recall | mAP@0.50 | mAP@0.50:0.95 |
+|---|---|---|---|---|---|---|---|
+| Behaviour (Phase 1) | Gaze direction | False-Gaze, True-Gaze | 3,254 images, custom | 0.9255 | 0.9463 | 0.9557 | 0.8059 |
+| Object (Phase 2) | Prohibited object | True-Object (phone-in-hand) | 700 images, custom | 0.9654 | 0.9633 | 0.9758 | 0.7926 |
+| Drowsiness (Phase 3) | Yawning / head-drop | Drowsy-True | 7,900 images, custom + NTHU CV Lab | 0.944 | 0.990 | 0.985 | 0.882 |
 
-**Sentinel** is a low-cost, solar-viable, edge-deployable acoustic monitoring device that listens continuously to a habitat and uses an on-device AI model to identify wildlife species from their calls in real time. Instead of requiring a person with a recorder and a trained ear, a single unit can sit in a remote location for months, flagging known species activity and — critically — surfacing **novel or unrecognized calls** that could indicate an undocumented population or an entirely new species.
+All three are YOLOv11s, trained independently with AdamW and phase-specific augmentation
+schedules (per-phase READMEs have the exact `yolo detect train` invocations). The behaviour
+dataset was shot in a Mercedes ML250 across three lighting conditions and four facial conditions
+(clean/bearded × glasses/none); the object dataset in a Chevrolet Malibu across left/right hand
+and two phone colors; the drowsiness dataset combines an in-house 18-driver set with the licensed
+NTHU CV Lab AVI corpus (5 scenarios: bare face, glasses, sunglasses, night–bare face,
+night–glasses).
 
-The idea placed **1st at the IEEE Sustainathon**, and this repository documents the working software prototype built to prove the concept: an end-to-end pipeline that takes raw field recordings and turns them into a trained bird-species classifier, built and validated on 11 real species found in our own region as a testbed before scaling to rarer, harder-to-reach ecosystems.
+Full PR/F1/confidence curves and confusion matrices for each model are in `docs/results/`.
 
-> 📍 **Current phase:** the classifier below runs and performs well on a desktop/GPU. The active work is re-architecting it into a compact model that can run entirely on a battery-powered **ESP32-S3** microcontroller with an **INMP441** MEMS microphone — turning this from a trained model into a physical field device.
+## The multi-task fusion journey
 
----
+Three different approaches to combining gaze and drowsiness into one network were built and
+benchmarked before landing on the one actually shipped:
 
-## 💡 Why This Matters
+| Approach | Design | Outcome |
+|---|---|---|
+| **Option 3** — scale-specific head routing | Shared backbone + neck; the behaviour head reads only the P3 feature map, the drowsiness head reads only P4+P5 — routed by scale specifically to keep the two tasks' gradients from competing | Intermediate experiment. Kept in `mtl/experiments/` as a reference point, not carried into the final architecture |
+| **FPN-Fusion** | Dual-backbone: two-stage squeeze-excitation channel attention (per-task SE → cross-task fusion SE) feeding a shared PANet neck, with dual task-specific heads | **Abandoned** — negative transfer between the two tasks degraded both |
+| **Hook-Tap** | Single backbone, forward hook taps a mid-network feature map, drowsiness routed to a structurally isolated private branch, gaze head left completely untouched | **Validated** — adopted, reported in the paper |
 
-- **No ground team required** — passive acoustic monitoring works where camera traps and human surveys can't (dense canopy, dangerous terrain, protected zones).
-- **Scales cheaply** — a single ESP32-class device costs a fraction of a satellite tag or a research expedition day.
-- **Finds the unexpected** — the same pipeline that recognizes *known* calls can also flag *unrecognized* ones for a researcher to review, turning every deployed unit into a passive discovery tool.
-- **Built for the field** — every design choice (see [Model Architecture](#-model-architecture)) accounts for the fact that the final target is a low-power microcontroller in a forest, not a server in a data center.
+The through-line: full architectural sharing (FPN-Fusion) caused the two tasks to actively
+interfere with each other, and partial sharing at the head level (Option 3) still left the
+backbone contending with two loss signals. Hook-Tap sidesteps this by not training the shared
+backbone against the drowsiness objective at all — the frozen backbone stays exactly as good at
+gaze as the standalone Phase 1 model, and drowsiness is learned entirely downstream of a single
+tapped feature map.
 
----
+## Hook-Tap architecture
 
-## 🗺️ System Architecture
-
-```mermaid
-flowchart LR
-    A[🎙️ Field Audio<br/>Xeno-canto recordings] --> B["1_slice_audio.py<br/>3s chunks + RMS silence filter"]
-    B --> C["2_make_spectrograms.py<br/>Mel-spectrogram → PNG"]
-    C --> D["3_train_model.py<br/>EfficientNetV2B0 transfer learning"]
-    D --> E["4_test_model.py<br/>Inference + confidence gating"]
-    E --> F{Confidence check}
-    F -->|High confidence| G[✅ Species identified]
-    F -->|Low confidence| H[❓ Flagged as Unknown<br/>possible new discovery]
-    D -.future work.-> I[📡 TFLite Micro model]
-    I -.future work.-> J[🔌 ESP32-S3 + INMP441<br/>Field deployment]
+```
+                       Input frame
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │  YOLOv11s backbone       │
+              │  (101 layers, frozen)    │
+              └────────────┬─────────────┘
+                           │  forward hook @ layer 15
+                    ┌──────┴───────┐
+                    │              │
+                    ▼              ▼
+         ┌───────────────────┐  ┌────────────────────────┐
+         │ Standard YOLO      │  │ Private branch          │
+         │ neck + head        │  │ Conv 512→128→64, s=2    │
+         │ (unmodified)       │  │ AdaptiveAvgPool(6×6)    │
+         │                    │  │ FC(2304→64→1)           │
+         └─────────┬──────────┘  └────────────┬────────────┘
+                   │                          │
+                   ▼                          ▼
+        Gaze/behaviour boxes         Drowsiness logit
+        (False-Gaze / True-Gaze)     (BCE, pos_weight=0.2)
 ```
 
-The pipeline is deliberately split into four independent, single-purpose stages so each one can be re-run, debugged, or swapped out without touching the rest — important when the end goal is to keep iterating on the model architecture for edge deployment.
+The tapped tensor is the 512-channel P3 feature map, captured off layer 15 via a
+`register_forward_hook`. The gaze pipeline runs through Ultralytics' stock neck/head with no
+modification — the same layers, same weights, same output shapes as the standalone Phase 1
+model — while drowsiness gets a lightweight private branch, ~0.3M additional parameters on top
+of the 9.41M shared backbone.
 
----
+**Why this is faster:** the sequential baseline runs three full forward passes per frame (one
+per model). Hook-Tap collapses gaze and drowsiness into a single backbone pass, plus a cheap
+downstream branch.
 
-## 🔬 The Pipeline in Detail
+| | Sequential (3 models) | Hook-Tap |
+|---|---|---|
+| Latency | 8.94 ms/frame (~112 FPS) | 5.93 ms/frame (~168 FPS) |
+| Speedup | — | 1.51× (−33.6%) |
+| Backbone compute | 3 full backbones | 1 shared backbone + 1 lightweight branch |
 
-### 1. Audio Slicing — [`1_slice_audio.py`](scripts/1_slice_audio.py)
-Raw Xeno-canto recordings are long, variable-length MP3s with lots of silence and background noise between calls. This stage:
-- Loads each recording at a fixed **22.05 kHz** sample rate for consistency across the whole dataset.
-- Slices it into uniform **3-second windows** — long enough to capture a full call phrase, short enough to keep the resulting dataset large and the model input size small.
-- Computes the **RMS (root-mean-square) energy** of every window and **discards any slice below a 0.02 threshold**, automatically throwing away silence and near-silent noise floor segments instead of letting them dilute the training set with unlabeled non-calls.
+Benchmarked on an RTX 5070 Ti.
 
-### 2. Spectrogram Generation — [`2_make_spectrograms.py`](scripts/2_make_spectrograms.py)
-Audio classification with CNNs works far better as an *image* problem than a raw-waveform problem, so every clean 3-second slice is converted into a **128-bin Mel-spectrogram**, then log-scaled to decibels (`power_to_db`) so quiet harmonics and loud calls are both visible in the same dynamic range. Each spectrogram is saved as a flat PNG (no axes/labels/margins) using the `magma` colormap, which keeps the intensity gradient — and therefore the acoustic information — perceptually easy for the CNN to separate.
-
-<p align="center">
-  <img src="assets/sample_spectrogram.png" width="480" alt="Sample Mel-spectrogram of a Tickell's Blue Flycatcher call"/>
-  <br/>
-  <em>Mel-spectrogram of a Tickell's Blue Flycatcher call — the bright ridges are the bird's call, distinct from the diffuse background texture.</em>
-</p>
-
-### 3. Model Training — [`3_train_model.py`](scripts/3_train_model.py)
-The spectrogram images are treated as a standard image-classification problem:
-- **Backbone:** `EfficientNetV2B0`, pretrained on ImageNet and **fully unfrozen** for full fine-tuning rather than feature extraction — the visual patterns in a spectrogram (harmonic ridges, formant sweeps) are different enough from natural images that letting the whole network adapt outperforms a frozen backbone.
-- **Augmentation:** random translation, zoom, and contrast simulate call timing/volume variation, while a `GaussianNoise` layer specifically simulates the background hiss of the low-cost microphone the device will actually use in the field — training the model to be robust to the exact noise profile of its future hardware, not just clean lab recordings.
-- **Classification head:** `GlobalAveragePooling2D → Dense(512) → BatchNorm → Dropout(0.4) → Dense(256) → Dropout(0.3) → Dense(num_classes, softmax)`, sized to handle the acoustic complexity of overlapping species calls without overfitting a relatively small dataset.
-- **Optimization:** Adam at a low `5e-5` learning rate (appropriate for fine-tuning a pretrained backbone), with `EarlyStopping` and `ReduceLROnPlateau` monitoring validation loss to avoid overtraining.
-
-### 4. Inference & Confidence Gating — [`4_test_model.py`](scripts/4_test_model.py)
-The test script doesn't just report the top prediction — it applies a **confidence threshold (35%)** before trusting it. Below that threshold, the result is reported as **"Unknown"** with its closest match shown for reference, rather than forcing a potentially wrong label. This is the mechanism that turns the classifier into a discovery tool in the field: a confidently-unrecognized call is exactly the kind of event a researcher would want flagged for manual review. A dedicated `0_Background` class also lets the model explicitly recognize "no bird, just ambient noise" instead of forcing every 3-second window into a species guess.
-
----
-
-## 🐦 Species Covered (Prototype Set)
-
-11 species native to our region were chosen as an accessible testbed to validate the full pipeline before targeting rarer species in harder-to-reach habitats, plus a dedicated background/noise class:
-
-<p align="center">
-  <img src="assets/species_folders.png" width="420" alt="Species class folders used for training"/>
-</p>
-
-| # | Species |
-|---|---|
-| 1 | Asian Koel |
-| 2 | Common Myna |
-| 3 | Coppersmith Barbet |
-| 4 | Golden Oriole |
-| 5 | Indian Grey Hornbill |
-| 6 | Indian Robin |
-| 7 | Jungle Crow |
-| 8 | Red-vented Bulbul |
-| 9 | Shikra |
-| 10 | Tickell's Blue Flycatcher |
-| 11 | White-throated Kingfisher |
-| — | *0_Background (noise / no call)* |
-
-**Dataset:** ~25 recordings per species sourced from [Xeno-canto](https://xeno-canto.org/), a citizen-science library of wildlife audio — sliced into thousands of labeled 3-second training examples by the pipeline above.
-
----
-
-## 📊 Results
-
-> _Fill in with your actual numbers before publishing — pull these straight from your training run's final epoch / evaluation output._
+**Reported results:**
 
 | Metric | Value |
 |---|---|
-| Validation accuracy | `XX.X%` |
-| Validation loss | `X.XX` |
-| Training epochs (early-stopped) | `XX / 150` |
-| Classes | 11 species + background |
+| Gaze — Precision / Recall | 0.9255 / 0.9463 |
+| Gaze — mAP@0.50 / mAP@0.50:0.95 | 0.9557 / 0.8059 |
+| Drowsiness — ROC-AUC / PR-AUC | 0.759 / 0.664 |
+| Drowsiness — Recall @ τ=0.60 (safety threshold) | 97.3% (181/186) |
+| Params / GFLOPs | 9.41M + 0.3M / 21.3 |
 
-Consider adding a confusion matrix image and a training curve (accuracy/loss vs. epoch) here — both are easy to generate from the `model.fit()` history object and make this section far more convincing to reviewers.
+Object detection (Phase 2) is not folded into Hook-Tap — it stays a separate model, run
+alongside in `pipeline/`. Folding it in is on the roadmap below.
 
----
-
-## 🔌 From Model to Field Device
-
-The classifier above was the **proof of concept**. In parallel, the physical sensor node was prototyped:
-
-- **MCU:** ESP32-S3 (TinyML-capable — on-chip AI acceleration, enough RAM/flash for a quantized model)
-- **Microphone:** INMP441 I²S MEMS microphone, hand-soldered to the ESP32-S3
-- **Status:** hardware assembled and functional; **actively redesigning the model architecture** to fit the constraints of on-device inference
-
-`EfficientNetV2B0` is far too large to run on a microcontroller — the current work is building a **compact CNN** (fewer, smaller layers, potentially depthwise-separable convolutions in a MobileNet-style design) trained on the same 11-species spectrogram pipeline, then converting it via **TensorFlow Lite for Microcontrollers** with post-training quantization, so the entire capture → spectrogram → inference loop runs standalone on the ESP32-S3 in the field, with no cloud or phone connection required.
-
----
-
-## 🗂️ Repository Structure
+## Repo structure
 
 ```
-bird-bioacoustic-monitor/
-├── scripts/
-│   ├── 1_slice_audio.py         # Raw audio → clean 3s labeled chunks
-│   ├── 2_make_spectrograms.py   # Audio chunks → Mel-spectrogram PNGs
-│   ├── 3_train_model.py         # Trains the EfficientNetV2B0 classifier
-│   └── 4_test_model.py          # Runs inference on a single spectrogram
-├── assets/
-│   ├── sample_spectrogram.png
-│   └── species_folders.png
-├── requirements.txt
-├── LICENSE
-└── README.md
+phase1_behaviour/     Gaze detector — config, training details, results
+phase2_object/        Object detector — config, training details, results
+phase3_drowsiness/    Drowsiness detector — config, training details, results
+mtl/hook_tap/         Validated fusion model + training script
+mtl/experiments/       FPN-Fusion and scale-routing attempts (not in production)
+pipeline/              Sequential 3-model inference demo
+docs/paper/            IEEE conference paper source
+docs/results/          Metrics, curves, confusion matrices
 ```
 
-> Note: `bird_calls/`, `processed_data/`, `spectrogram_images/`, and the trained `.h5` model are excluded from version control (see `.gitignore`) since they're large, generated artifacts. See [Dataset](#-species-covered-prototype-set) for how to source the raw audio yourself.
-
----
-
-## ⚙️ Getting Started
+## Getting started
 
 ```bash
-# 1. Clone and install dependencies
-git clone https://github.com/<your-username>/bird-bioacoustic-monitor.git
-cd bird-bioacoustic-monitor
-pip install -r requirements.txt
+pip install ultralytics opencv-python torch
 
-# 2. Place raw recordings in bird_calls/<species_name>/*.mp3 (one folder per class)
-
-# 3. Run the pipeline in order
-python scripts/1_slice_audio.py          # -> processed_data/
-python scripts/2_make_spectrograms.py    # -> spectrogram_images/
-python scripts/3_train_model.py          # -> bird_monitor_v4_aggressive.h5
-
-# 4. Test on a single spectrogram
-python scripts/4_test_model.py
+python pipeline/pipeline.py
 ```
 
----
+Developed against Python 3.14, PyTorch 2.10, Ultralytics 8.4. Update the model paths at the top
+of `pipeline.py` to point at your own trained weights before running — checkpoints aren't
+bundled in this repo.
 
-## 🛣️ Roadmap
+## Data & weights
 
-- [x] Validate the full pipeline (slicing → spectrograms → classification) on 11 known species
-- [x] Confidence-gated inference to flag unrecognized calls
-- [x] Assemble ESP32-S3 + INMP441 hardware prototype
-- [ ] Design and train a compact, quantization-friendly model architecture
-- [ ] Convert to TensorFlow Lite Micro and deploy fully on-device
-- [ ] Field-test the standalone unit for continuous, unattended monitoring
-- [ ] Extend beyond the 11-species testbed toward rarer, harder-to-survey species
+Datasets aren't included. The custom sets contain face imagery of the two authors and study
+volunteers, kept out of the repo for privacy. Trained weights aren't published here yet.
 
----
+## Roadmap
 
-## 👥 Team & Acknowledgments
+Work in progress on folding all three tasks — including object detection — into a single
+pipeline with temporal reasoning, rather than Hook-Tap's current two-task scope:
 
-Built by [Your Name] and team, originally pitched and awarded **1st place at the IEEE Sustainathon**. Training audio sourced from the [Xeno-canto](https://xeno-canto.org/) community bird-sound archive.
+```
+Frame → Shared backbone → [Gaze head | Drowsy head | Object head]
+      → per-task predictions → attention fusion layer → LSTM → risk output
+```
 
-## 📄 License
+The label format for this stage is already standardized: `Img(gaze, object, drowsy)`, e.g.
+`Img(0,1,1)`, merged from the three originally-separate Roboflow projects into unified
+`final_train.csv` / `final_val.csv` splits over a centralized image pool. This moves the system
+from three independent binary signals to a single temporally-aware risk score.
 
-Released under the [MIT License](LICENSE).
+## Paper
+
+*Hook-Tap: Structurally Gradient-Isolated Single-Backbone Multi-Task Fusion for Real-Time
+Driver Monitoring Using Pretrained YOLO Models* — IEEEtran format, submitted to a regional IEEE
+conference (2026) as a first step toward mid-tier venues. Source in `docs/paper/`.
+
+```
+Citation pending publication.
+```
+
+## Authors
+
+Aarav Rasquinha, Ashmit Dhown — BITS Pilani Dubai Campus (EEE / CS)
+Advisors: Dr. Ashutosh Mishra, Dr. Ashish
+
+## License
+
+To be finalized.
