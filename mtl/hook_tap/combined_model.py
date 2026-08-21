@@ -47,7 +47,7 @@ class UnifiedInCabinNet(nn.Module):
     def _hook_p4_layer(self, module, layer_input, layer_output):
         self._captured_p3 = layer_output
 
-    # 🚀 THE CRITICAL INSULATION BLOCK: Overrides PyTorch's recursive state propagation
+    #  THE CRITICAL INSULATION BLOCK: Overrides PyTorch's recursive state propagation
     def train(self, mode: bool = True):
         # Only toggle state for standard PyTorch layers
         self.drw_branch.train(mode)
