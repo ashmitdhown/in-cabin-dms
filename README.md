@@ -1,4 +1,4 @@
-# In-Cabin AI Monitoring System
+# In-Cabin AI Driver Monitoring System
 
 Real-time driver state monitoring for SAE Level 2 partially-automated vehicles, built on three
 YOLOv11 detectors and a custom single-backbone fusion architecture (Hook-Tap) that runs two of
