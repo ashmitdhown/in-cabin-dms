@@ -107,7 +107,7 @@ downstream branch.
 | | Sequential (3 models) | Hook-Tap |
 |---|---|---|
 | Latency | 8.94 ms/frame (~112 FPS) | 5.93 ms/frame (~168 FPS) |
-| Speedup | — | 1.51× (−33.6%) |
+| Speedup | - | 1.51× (−33.6%) |
 | Backbone compute | 3 full backbones | 1 shared backbone + 1 lightweight branch |
 
 Benchmarked on an RTX 5070 Ti.
@@ -116,10 +116,10 @@ Benchmarked on an RTX 5070 Ti.
 
 | Metric | Value |
 |---|---|
-| Gaze — Precision / Recall | 0.9255 / 0.9463 |
-| Gaze — mAP@0.50 / mAP@0.50:0.95 | 0.9557 / 0.8059 |
-| Drowsiness — ROC-AUC / PR-AUC | 0.759 / 0.664 |
-| Drowsiness — Recall @ τ=0.60 (safety threshold) | 97.3% (181/186) |
+| Gaze - Precision / Recall | 0.9255 / 0.9463 |
+| Gaze - mAP@0.50 / mAP@0.50:0.95 | 0.9557 / 0.8059 |
+| Drowsiness - ROC-AUC / PR-AUC | 0.759 / 0.664 |
+| Drowsiness - Recall @ τ=0.60 (safety threshold) | 97.3% (181/186) |
 | Params / GFLOPs | 9.41M + 0.3M / 21.3 |
 
 Object detection (Phase 2) is not folded into Hook-Tap — it stays a separate model, run
@@ -128,9 +128,9 @@ alongside in `pipeline/`. Folding it in is on the roadmap below.
 ## Repo structure
 
 ```
-phase1_behaviour/     Gaze detector — config, training details, results
-phase2_object/        Object detector — config, training details, results
-phase3_drowsiness/    Drowsiness detector — config, training details, results
+phase1_behaviour/     Gaze detector - config, training details, results
+phase2_object/        Object detector - config, training details, results
+phase3_drowsiness/    Drowsiness detector - config, training details, results
 mtl/hook_tap/         Validated fusion model + training script
 mtl/experiments/       FPN-Fusion and scale-routing attempts (not in production)
 pipeline/              Sequential 3-model inference demo
